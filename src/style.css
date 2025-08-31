@@ -1,0 +1,19 @@
+/* OpenLayers 기본 스타일 */
+@import "ol/ol.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 추가 커스텀 스타일 */
+.ol-control {
+  @apply rounded-md shadow-lg;
+}
+
+.ol-zoom {
+  @apply bg-white;
+}
+
+.ol-zoom button {
+  @apply text-gray-700 hover:bg-gray-100 transition-colors;
+}
