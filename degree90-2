@@ -1,0 +1,81 @@
+/**
+ * 사각형 폴리곤을 내각 90도 직사각형으로 교정
+ * @param {ol/Feature} feature - OpenLayers 폴리곤 피처
+ * @returns {Array} 교정된 좌표 배열
+ */
+function rectangularizePolygon(feature) {
+  const geometry = feature.getGeometry();
+  const coords = geometry.getCoordinates()[0].slice(0, -1); // 마지막 반복 꼭짓점 제거 (닫힌 링)
+
+  if (coords.length !== 4) {
+    console.warn('4개의 꼭짓점을 가진 사각형만 지원합니다.');
+    return null;
+  }
+
+  // 1. 중심점 계산
+  const center = getCenter(coords);
+
+  // 2. PCA로 주축 방향 계산
+  const angle = getPrincipalAngle(coords, center);
+
+  // 3. 주축 방향으로 회전 후 AABB 계산
+  const rotatedCoords = coords.map(p => rotatePoint(p, center, -angle));
+  const bbox = getAABB(rotatedCoords);
+
+  // 4. AABB를 다시 원래 각도로 회전
+  const rectCoords = [
+    [bbox.minX, bbox.minY],
+    [bbox.maxX, bbox.minY],
+    [bbox.maxX, bbox.maxY],
+    [bbox.minX, bbox.maxY],
+  ].map(p => rotatePoint(p, center, angle));
+
+  // 닫힌 링으로 반환
+  return [...rectCoords, rectCoords[0]];
+}
+
+// ── 유틸 함수들 ──────────────────────────────────────
+
+function getCenter(coords) {
+  const x = coords.reduce((s, p) => s + p[0], 0) / coords.length;
+  const y = coords.reduce((s, p) => s + p[1], 0) / coords.length;
+  return [x, y];
+}
+
+/**
+ * PCA (공분산 행렬의 고유벡터)로 주축 각도 계산
+ */
+function getPrincipalAngle(coords, center) {
+  let xx = 0, xy = 0, yy = 0;
+
+  for (const [x, y] of coords) {
+    const dx = x - center[0];
+    const dy = y - center[1];
+    xx += dx * dx;
+    xy += dx * dy;
+    yy += dy * dy;
+  }
+
+  // 공분산 행렬의 고유값 방향
+  return 0.5 * Math.atan2(2 * xy, xx - yy);
+}
+
+function rotatePoint([x, y], [cx, cy], angle) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = x - cx;
+  const dy = y - cy;
+  return [
+    cx + dx * cos - dy * sin,
+    cy + dx * sin + dy * cos,
+  ];
+}
+
+function getAABB(coords) {
+  return {
+    minX: Math.min(...coords.map(p => p[0])),
+    maxX: Math.max(...coords.map(p => p[0])),
+    minY: Math.min(...coords.map(p => p[1])),
+    maxY: Math.max(...coords.map(p => p[1])),
+  };
+}
