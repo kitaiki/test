@@ -1,0 +1,47 @@
+function rectangularizeByEdgeDirection(feature) {
+  const geometry = feature.getGeometry();
+  const coords = geometry.getCoordinates()[0].slice(0, -1);
+
+  if (coords.length !== 4) return null;
+
+  // 1. 마주보는 엣지 쌍의 평균 방향 벡터 계산
+  // 엣지 0: 0→1, 엣지 1: 1→2, 엣지 2: 2→3, 엣지 3: 3→0
+  const edges = coords.map((p, i) => {
+    const next = coords[(i + 1) % coords.length];
+    return [next[0] - p[0], next[1] - p[1]];
+  });
+
+  // 수평 엣지 쌍 (0, 2)의 평균 방향
+  const primaryAngle = getAverageEdgeAngle(edges[0], edges[2]);
+
+  const center = getCenter(coords);
+
+  // 2. 회전 후 AABB → 회전 복원
+  const rotated = coords.map(p => rotatePoint(p, center, -primaryAngle));
+  const bbox = getAABB(rotated);
+
+  const rectCoords = [
+    [bbox.minX, bbox.minY],
+    [bbox.maxX, bbox.minY],
+    [bbox.maxX, bbox.maxY],
+    [bbox.minX, bbox.maxY],
+  ].map(p => rotatePoint(p, center, primaryAngle));
+
+  return [...rectCoords, rectCoords[0]];
+}
+
+/**
+ * 두 엣지 벡터의 평균 방향 각도 (반대 방향 엣지를 정방향으로 정렬 후 평균)
+ */
+function getAverageEdgeAngle(edge1, edge2) {
+  const a1 = Math.atan2(edge1[1], edge1[0]);
+  // edge2는 반대 방향이므로 180도 회전하여 정렬
+  let a2 = Math.atan2(-edge2[1], -edge2[0]);
+
+  // 각도 차이가 π 이상이면 보정
+  if (Math.abs(a1 - a2) > Math.PI) {
+    a2 += a2 < a1 ? 2 * Math.PI : -2 * Math.PI;
+  }
+
+  return (a1 + a2) / 2;
+}
