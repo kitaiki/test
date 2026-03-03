@@ -1,0 +1,86 @@
+import org.locationtech.jts.geom.*;
+import org.locationtech.jts.io.WKBReader;
+import org.locationtech.jts.operation.union.CascadedPolygonUnion;
+
+import java.nio.file.*;
+import java.util.*;
+import java.util.zip.*;
+
+@Service
+@RequiredArgsConstructor
+public class AdminUnionService {
+
+    private final AdminPolygonMapper mapper;
+
+    public Path createUnionZip(int n) throws Exception {
+
+        List<Map<String, Object>> rows = mapper.selectAdminPolygons();
+
+        WKBReader reader = new WKBReader();
+        Map<String, List<Geometry>> groups = new LinkedHashMap<>();
+
+        // 1️⃣ 그룹핑
+        for (Map<String, Object> row : rows) {
+
+            String admincode = (String) row.get("admincode");
+            if (admincode == null || admincode.length() < n) continue;
+
+            byte[] wkb = (byte[]) row.get("geom_wkb");
+            if (wkb == null) continue;
+
+            Geometry geom = reader.read(wkb);
+            if (geom.isEmpty()) continue;
+
+            String prefix = admincode.substring(0, n);
+            groups.computeIfAbsent(prefix, k -> new ArrayList<>()).add(geom);
+        }
+
+        Path outputDir = Files.createDirectories(Paths.get("union_output"));
+        List<Path> createdFiles = new ArrayList<>();
+
+        // 2️⃣ 그룹별 Union
+        for (Map.Entry<String, List<Geometry>> entry : groups.entrySet()) {
+
+            String prefix = entry.getKey();
+            List<Geometry> geoms = entry.getValue();
+            if (geoms.isEmpty()) continue;
+
+            Geometry union = CascadedPolygonUnion.union(geoms);
+            Geometry normalized = normalizeToMultiPolygon(union);
+
+            Path shpPath = outputDir.resolve("union_" + prefix + ".shp");
+
+            List<Path> shpFiles = ShapefileWriter.writeSingleFeature(
+                    shpPath,
+                    prefix,
+                    normalized
+            );
+
+            createdFiles.addAll(shpFiles);
+        }
+
+        // 3️⃣ ZIP 생성
+        Path zipPath = Paths.get("admin_union.zip");
+        zipFiles(createdFiles, zipPath);
+
+        return zipPath;
+    }
+
+    private Geometry normalizeToMultiPolygon(Geometry g) {
+        GeometryFactory gf = g.getFactory();
+        if (g instanceof MultiPolygon) return g;
+        if (g instanceof Polygon)
+            return gf.createMultiPolygon(new Polygon[]{(Polygon) g});
+        return g;
+    }
+
+    private void zipFiles(List<Path> files, Path zipPath) throws Exception {
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            for (Path file : new LinkedHashSet<>(files)) {
+                zos.putNextEntry(new ZipEntry(file.getFileName().toString()));
+                Files.copy(file, zos);
+                zos.closeEntry();
+            }
+        }
+    }
+}
