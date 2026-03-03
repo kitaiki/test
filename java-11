@@ -1,0 +1,67 @@
+import org.geotools.data.*;
+import org.geotools.data.shapefile.*;
+import org.geotools.feature.simple.*;
+import org.geotools.feature.*;
+import org.locationtech.jts.geom.*;
+
+import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+
+public class ShapefileWriter {
+
+    public static List<Path> writeSingleFeature(
+            Path shpPath,
+            String prefix,
+            Geometry geom) throws Exception {
+
+        ShapefileDataStoreFactory factory = new ShapefileDataStoreFactory();
+
+        Map<String, Serializable> params = new HashMap<>();
+        params.put("url", shpPath.toUri().toURL());
+        params.put("create spatial index", Boolean.TRUE);
+
+        ShapefileDataStore store =
+                (ShapefileDataStore) factory.createNewDataStore(params);
+
+        store.setCharset(StandardCharsets.UTF_8);
+
+        SimpleFeatureTypeBuilder tb = new SimpleFeatureTypeBuilder();
+        tb.setName("union");
+        tb.add("adminpref", String.class);
+        tb.add("the_geom", MultiPolygon.class);
+
+        SimpleFeatureType schema = tb.buildFeatureType();
+        store.createSchema(schema);
+
+        SimpleFeatureBuilder fb = new SimpleFeatureBuilder(schema);
+        fb.add(prefix);
+        fb.add(geom);
+
+        SimpleFeature feature = fb.buildFeature(null);
+
+        Transaction tx = new DefaultTransaction("create");
+        SimpleFeatureStore fs =
+                (SimpleFeatureStore) store.getFeatureSource(store.getTypeNames()[0]);
+        fs.setTransaction(tx);
+
+        fs.addFeatures(DataUtilities.collection(feature));
+        tx.commit();
+        tx.close();
+        store.dispose();
+
+        return listSidecars(shpPath);
+    }
+
+    private static List<Path> listSidecars(Path shpPath) {
+        String base = shpPath.toString().replace(".shp", "");
+        String[] exts = {"shp", "shx", "dbf", "prj", "cpg"};
+        List<Path> files = new ArrayList<>();
+        for (String ext : exts) {
+            Path p = Paths.get(base + "." + ext);
+            if (Files.exists(p)) files.add(p);
+        }
+        return files;
+    }
+}
