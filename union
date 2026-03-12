@@ -1,0 +1,128 @@
+import org.geotools.data.simple.SimpleFeatureCollection;
+import org.geotools.data.simple.SimpleFeatureIterator;
+import org.geotools.feature.DefaultFeatureCollection;
+import org.geotools.feature.simple.SimpleFeatureBuilder;
+import org.geotools.feature.simple.SimpleFeatureTypeBuilder;
+import org.locationtech.jts.geom.*;
+import org.locationtech.jts.operation.polygonize.Polygonizer;
+import org.opengis.feature.simple.SimpleFeature;
+import org.opengis.feature.simple.SimpleFeatureType;
+import org.opengis.referencing.crs.CoordinateReferenceSystem;
+
+import java.util.*;
+
+public class LineToPolygonByCode {
+
+    private final GeometryFactory geometryFactory = new GeometryFactory();
+
+    public DefaultFeatureCollection polygonizeByCode(
+            SimpleFeatureCollection lineFeatures,
+            String codeFieldName
+    ) {
+        Map<String, List<Geometry>> groupedLines = new HashMap<>();
+        CoordinateReferenceSystem crs = lineFeatures.getSchema().getCoordinateReferenceSystem();
+
+        // 1. code별로 라인 그룹핑
+        try (SimpleFeatureIterator it = lineFeatures.features()) {
+            while (it.hasNext()) {
+                SimpleFeature feature = it.next();
+
+                Object codeObj = feature.getAttribute(codeFieldName);
+                if (codeObj == null) {
+                    continue;
+                }
+
+                String code = codeObj.toString();
+                Object geomObj = feature.getDefaultGeometry();
+
+                if (!(geomObj instanceof Geometry)) {
+                    continue;
+                }
+
+                Geometry geometry = (Geometry) geomObj;
+
+                // LineString / MultiLineString 모두 처리
+                List<Geometry> lines = extractLineGeometries(geometry);
+                groupedLines.computeIfAbsent(code, k -> new ArrayList<>()).addAll(lines);
+            }
+        }
+
+        // 2. 결과 feature type 생성
+        SimpleFeatureType polygonType = createPolygonFeatureType(crs, codeFieldName);
+
+        DefaultFeatureCollection result = new DefaultFeatureCollection();
+        SimpleFeatureBuilder featureBuilder = new SimpleFeatureBuilder(polygonType);
+
+        int featureId = 0;
+
+        // 3. 그룹별 polygonize
+        for (Map.Entry<String, List<Geometry>> entry : groupedLines.entrySet()) {
+            String code = entry.getKey();
+            List<Geometry> lineList = entry.getValue();
+
+            Polygonizer polygonizer = new Polygonizer();
+
+            for (Geometry line : lineList) {
+                // 필요 시 union 또는 noding 보정 추가 가능
+                polygonizer.add(line);
+            }
+
+            @SuppressWarnings("unchecked")
+            Collection<Polygon> polygons = polygonizer.getPolygons();
+
+            if (polygons == null || polygons.isEmpty()) {
+                continue;
+            }
+
+            // 같은 code에 대해 여러 polygon이 나올 수 있으므로 MultiPolygon으로 묶음
+            MultiPolygon multiPolygon = toMultiPolygon(polygons);
+
+            featureBuilder.set("the_geom", multiPolygon);
+            featureBuilder.set(codeFieldName, code);
+
+            SimpleFeature polygonFeature =
+                    featureBuilder.buildFeature(String.valueOf(featureId++));
+            result.add(polygonFeature);
+        }
+
+        return result;
+    }
+
+    private List<Geometry> extractLineGeometries(Geometry geometry) {
+        List<Geometry> result = new ArrayList<>();
+
+        if (geometry instanceof LineString) {
+            result.add(geometry);
+        } else if (geometry instanceof MultiLineString) {
+            for (int i = 0; i < geometry.getNumGeometries(); i++) {
+                Geometry g = geometry.getGeometryN(i);
+                if (g instanceof LineString) {
+                    result.add(g);
+                }
+            }
+        } else if (geometry instanceof GeometryCollection) {
+            for (int i = 0; i < geometry.getNumGeometries(); i++) {
+                result.addAll(extractLineGeometries(geometry.getGeometryN(i)));
+            }
+        }
+
+        return result;
+    }
+
+    private MultiPolygon toMultiPolygon(Collection<Polygon> polygons) {
+        Polygon[] polygonArray = polygons.toArray(new Polygon[0]);
+        return geometryFactory.createMultiPolygon(polygonArray);
+    }
+
+    private SimpleFeatureType createPolygonFeatureType(
+            CoordinateReferenceSystem crs,
+            String codeFieldName
+    ) {
+        SimpleFeatureTypeBuilder tb = new SimpleFeatureTypeBuilder();
+        tb.setName("polygon_by_code");
+        tb.setCRS(crs);
+        tb.add("the_geom", MultiPolygon.class);
+        tb.add(codeFieldName, String.class);
+        return tb.buildFeatureType();
+    }
+}
